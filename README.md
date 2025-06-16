@@ -43,8 +43,8 @@ Command-line tools hit rate limits very quickly (around 150+ requests), while GU
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/AppleOnDeviceOpenAI.git
-cd AppleOnDeviceOpenAI
+git clone https://github.com/gety-ai/apple-on-device-openai.git
+cd apple-on-device-openai
 ```
 
 2. Open the project in Xcode:
