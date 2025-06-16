@@ -19,6 +19,7 @@ class VaporServerManager: ObservableObject {
     private var serverTask: Task<Void, Never>?
 
     private static let modelName = "apple-on-device"
+    private static var loggingBootstrapped = false
 
     func startServer(configuration: ServerConfiguration) async {
         guard !isRunning else { return }
@@ -26,7 +27,14 @@ class VaporServerManager: ObservableObject {
         do {
             // Create Vapor application
             var env = try Environment.detect()
-            try LoggingSystem.bootstrap(from: &env)
+
+            // Only bootstrap logging system once per process
+            // This prevents the "logging system can only be initialized once per process" error
+            // when stopping and restarting the server
+            if !Self.loggingBootstrapped {
+                try LoggingSystem.bootstrap(from: &env)
+                Self.loggingBootstrapped = true
+            }
 
             let app = Application(env)
             self.app = app
