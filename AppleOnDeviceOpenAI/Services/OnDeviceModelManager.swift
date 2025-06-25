@@ -130,11 +130,11 @@ actor OnDeviceModelManager {
         let transcriptEntries = convertMessagesToTranscript(previousMessages)
 
         // Create transcript with conversation history
-        let transcript = Transcript(entries: transcriptEntries)
+        let transcript = Transcript()
 
         // Create new session with the conversation transcript
         let session = LanguageModelSession(
-            transcript: transcript
+            model: model
         )
 
         do {
