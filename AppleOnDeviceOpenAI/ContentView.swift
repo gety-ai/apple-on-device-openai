@@ -7,6 +7,8 @@
 
 import Combine
 import SwiftUI
+import Foundation
+import Network
 
 // MARK: - Models
 struct ServerConfiguration {
@@ -14,7 +16,7 @@ struct ServerConfiguration {
     var port: Int
 
     static let `default` = ServerConfiguration(
-        host: "127.0.0.1",
+        host: "0.0.0.0",
         port: 11535
     )
 
@@ -35,7 +37,7 @@ struct ServerConfiguration {
 @MainActor
 class ServerViewModel: ObservableObject {
     @Published var configuration = ServerConfiguration.default
-    @Published var hostInput: String = "127.0.0.1"
+    @Published var hostInput: String = "0.0.0.0"
     @Published var portInput: String = "11535"
     @Published var isModelAvailable: Bool = false
     @Published var modelUnavailableReason: String?
@@ -51,16 +53,25 @@ class ServerViewModel: ObservableObject {
         serverManager.lastError
     }
 
+    // Public URLs that the UI shows
+    private var advertisedHost: String {
+        if configuration.host == "0.0.0.0" {
+            return Self.localIPAddress() ?? "127.0.0.1"
+        } else {
+            return configuration.host
+        }
+    }
+
     var serverURL: String {
-        configuration.url
+        "http://\(advertisedHost):\(configuration.port)"
     }
 
     var openaiBaseURL: String {
-        configuration.openaiBaseURL
+        "\(serverURL)/v1"
     }
 
     var chatCompletionsEndpoint: String {
-        configuration.chatCompletionsEndpoint
+        "\(serverURL)/v1/chat/completions"
     }
 
     let modelName = "apple-on-device"
@@ -126,6 +137,36 @@ class ServerViewModel: ObservableObject {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
         #endif
+    }
+
+    // Networking helpers
+    private static func localIPAddress() -> String? {
+        var addrPointer: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&addrPointer) == 0 else { return nil }
+        defer { freeifaddrs(addrPointer) }
+
+        var ptr = addrPointer
+        while ptr != nil {
+            let iface = ptr!.pointee
+            if iface.ifa_addr.pointee.sa_family == UInt8(AF_INET) { // IPv4
+                let name = String(cString: iface.ifa_name)
+                // Typical Apple interface names (en0 Wi‑Fi, en1 Ethernet/USB‑C)
+                if name == "en0" || name == "en1" {
+                    var addr = iface.ifa_addr.pointee
+                    var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    getnameinfo(&addr,
+                                socklen_t(iface.ifa_addr.pointee.sa_len),
+                                &hostname,
+                                socklen_t(hostname.count),
+                                nil,
+                                0,
+                                NI_NUMERICHOST)
+                    return String(cString: hostname)
+                }
+            }
+            ptr = iface.ifa_next
+        }
+        return nil
     }
 }
 
