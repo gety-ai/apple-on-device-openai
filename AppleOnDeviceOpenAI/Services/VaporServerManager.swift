@@ -262,8 +262,7 @@ class VaporServerManager: ObservableObject {
                     for try await cumulativeResponse in responseStream {
                         print("DEBUG: Processing stream chunk")
                         // Calculate the delta (new content since last iteration)
-                        let deltaContent = String(
-                            cumulativeResponse.dropFirst(previousContent.count))
+                        let deltaContent = String(cumulativeResponse.content.dropFirst(previousContent.count))
 
                         // Skip empty deltas (except for the first chunk which might include role)
                         if deltaContent.isEmpty && !isFirstChunk {
@@ -296,7 +295,7 @@ class VaporServerManager: ObservableObject {
                         print("DEBUG: Successfully wrote SSE data chunk")
 
                         // Update tracking variables
-                        previousContent = cumulativeResponse
+                        previousContent = cumulativeResponse.content
                         isFirstChunk = false
                     }
 
