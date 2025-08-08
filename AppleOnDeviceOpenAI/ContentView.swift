@@ -7,6 +7,8 @@
 
 import Combine
 import SwiftUI
+import Foundation
+import Network
 
 // MARK: - Models
 struct ServerConfiguration {
@@ -41,6 +43,11 @@ class ServerViewModel: ObservableObject {
     @Published var modelUnavailableReason: String?
     @Published var isCheckingModel: Bool = false
 
+    @Published var availableAddresses: [String] = []
+    @Published var selectedAddress: String = "127.0.0.1" {
+        didSet { hostInput = selectedAddress }
+    }
+
     private let serverManager = VaporServerManager()
 
     var isRunning: Bool {
@@ -51,21 +58,41 @@ class ServerViewModel: ObservableObject {
         serverManager.lastError
     }
 
+    /// True whenever the user is binding to something other than 127.0.0.1.
+    var needsLANWarning: Bool {
+        // Treat “all interfaces” (0.0.0.0) as LAN‑visible too.
+        selectedAddress != "127.0.0.1"
+    }
+
+    private var advertisedHost: String {
+        switch configuration.host {
+        case "0.0.0.0":
+            // We are listening on *all* interfaces – pick something shareable
+            return primaryLANAddress() ?? "127.0.0.1"
+        default:
+            // The user chose a concrete IP (loop‑back included)
+            return configuration.host
+        }
+    }
+
     var serverURL: String {
-        configuration.url
+        "http://\(advertisedHost):\(configuration.port)"
     }
 
     var openaiBaseURL: String {
-        configuration.openaiBaseURL
+        "\(serverURL)/v1"
     }
 
     var chatCompletionsEndpoint: String {
-        configuration.chatCompletionsEndpoint
+        "\(serverURL)/v1/chat/completions"
     }
 
     let modelName = "apple-on-device"
 
     init() {
+        refreshAddresses()                              // populate the picker
+        selectedAddress = configuration.host
+
         // Initialize with current configuration values
         self.hostInput = configuration.host
         self.portInput = String(configuration.port)
@@ -103,10 +130,7 @@ class ServerViewModel: ObservableObject {
     }
 
     private func updateConfiguration() {
-        let trimmedHost = hostInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedHost.isEmpty {
-            configuration.host = trimmedHost
-        }
+        configuration.host = selectedAddress
 
         if let port = Int(portInput.trimmingCharacters(in: .whitespacesAndNewlines)),
             port > 0 && port <= 65535
@@ -117,6 +141,7 @@ class ServerViewModel: ObservableObject {
 
     func resetToDefaults() {
         configuration = ServerConfiguration.default
+        selectedAddress = configuration.host
         hostInput = configuration.host
         portInput = String(configuration.port)
     }
@@ -126,6 +151,60 @@ class ServerViewModel: ObservableObject {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
         #endif
+    }
+
+    /// Refresh the list (e.g. when a new Wi‑Fi network is joined).
+    func refreshAddresses() {
+        // Put localhost first, keep “all interfaces”, then the rest.
+        availableAddresses = ["127.0.0.1", "0.0.0.0"]
+            + currentIPv4Addresses().filter { $0 != "127.0.0.1" }
+        // Keep selection valid
+        if !availableAddresses.contains(selectedAddress) {
+            selectedAddress = availableAddresses.first ?? "0.0.0.0"
+        }
+    }
+
+    /// Returns all IPv4 addresses currently assigned to the device,
+    /// sorted and deduplicated (loop‑back first).
+    func currentIPv4Addresses() -> [String] {
+        var addresses: Set<String> = []
+
+        var addrPointer: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&addrPointer) == 0 else { return [] }
+        defer { freeifaddrs(addrPointer) }
+
+        var ptr = addrPointer
+        while let iface = ptr?.pointee {
+            if iface.ifa_addr.pointee.sa_family == UInt8(AF_INET) {
+                var addr = iface.ifa_addr.pointee
+                var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                getnameinfo(
+                    &addr,
+                    socklen_t(iface.ifa_addr.pointee.sa_len),
+                    &hostname,
+                    socklen_t(hostname.count),
+                    nil,
+                    0,
+                    NI_NUMERICHOST
+                )
+                addresses.insert(String(cString: hostname))
+            }
+            ptr = iface.ifa_next
+        }
+
+        // Keep loop‑back first, then alphabetical
+        return ["127.0.0.1"] + addresses.subtracting(["127.0.0.1"]).sorted()
+    }
+
+    /// Return the first non‑loop‑back IPv4 address that is *not* link‑local (169.254.x.x).
+    /// Falls back to nil when no such address exists.
+    private func primaryLANAddress() -> String? {
+        for addr in currentIPv4Addresses() {
+            if addr != "127.0.0.1" && !addr.hasPrefix("169.254") {
+                return addr          // Wi‑Fi / Ethernet / USB‑C / Thunderbolt, etc.
+            }
+        }
+        return nil
     }
 }
 
@@ -382,11 +461,34 @@ struct ContentView: View {
                 GroupBox("Server Configuration") {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
-                            Text("Host:")
-                                .frame(width: 60, alignment: .leading)
-                            TextField("127.0.0.1", text: $viewModel.hostInput)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .disabled(viewModel.isRunning)
+                            Picker("Bind Address", selection: $viewModel.selectedAddress) {
+                                ForEach(viewModel.availableAddresses, id: \.self) { addr in
+                                    Text(addr == "0.0.0.0" ? "All interfaces (0.0.0.0)" : addr).tag(addr)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .disabled(viewModel.isRunning)
+
+                            Button {
+                                viewModel.refreshAddresses()
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                                    .imageScale(.medium)      // optional: size the symbol
+                            }
+                            .help("Rescan network interfaces")
+                            .disabled(viewModel.isRunning)
+                        }
+
+                        // LAN‑visibility warning
+                        if viewModel.needsLANWarning {
+                            HStack(spacing: 6) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.red)
+                                Text("Binding to this address makes the server reachable by other devices\n" +
+                                     "on your local network. Make sure you trust the network or use a firewall.")
+                                    .font(.caption)
+                                    .foregroundColor(.yellow)
+                            }
                         }
 
                         HStack {
