@@ -43,6 +43,24 @@ nonisolated struct ChatCompletionRequest: Content, Sendable {
     }
 }
 
+// Content types for structured messages
+nonisolated struct MessageContent: Content, Sendable {
+    let type: String
+    let text: String?
+    let imageUrl: ImageUrl?
+    
+    enum CodingKeys: String, CodingKey {
+        case type
+        case text
+        case imageUrl = "image_url"
+    }
+}
+
+nonisolated struct ImageUrl: Content, Sendable {
+    let url: String
+    let detail: String?
+}
+
 nonisolated struct ChatMessage: Content, Sendable {
     let role: String
     let content: String
@@ -52,6 +70,47 @@ nonisolated struct ChatMessage: Content, Sendable {
         self.role = role
         self.content = content
         self.name = name
+    }
+    
+    // Custom decoder to handle both string and array content formats
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        self.role = try container.decode(String.self, forKey: .role)
+        self.name = try container.decodeIfPresent(String.self, forKey: .name)
+        
+        // Try to decode content as string first
+        if let stringContent = try? container.decode(String.self, forKey: .content) {
+            self.content = stringContent
+        } else if let arrayContent = try? container.decode([MessageContent].self, forKey: .content) {
+            // Extract text from structured content array
+            let textParts = arrayContent.compactMap { contentItem in
+                contentItem.type == "text" ? contentItem.text : nil
+            }
+            self.content = textParts.joined(separator: " ")
+        } else {
+            throw DecodingError.typeMismatch(
+                String.self,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath + [CodingKeys.content],
+                    debugDescription: "Content must be either a string or an array of content objects"
+                )
+            )
+        }
+    }
+    
+    // Custom encoder to always encode as string
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(role, forKey: .role)
+        try container.encode(content, forKey: .content)
+        try container.encodeIfPresent(name, forKey: .name)
+    }
+    
+    enum CodingKeys: String, CodingKey {
+        case role
+        case content
+        case name
     }
 }
 
