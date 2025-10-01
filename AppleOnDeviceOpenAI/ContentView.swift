@@ -11,7 +11,7 @@ import Foundation
 import Network
 
 // MARK: - Models
-struct ServerConfiguration {
+struct ServerConfiguration: Codable {
     var host: String
     var port: Int
 
@@ -37,6 +37,7 @@ struct ServerConfiguration {
 @MainActor
 class ServerViewModel: ObservableObject {
     @Published var configuration = ServerConfiguration.default
+    @Published var fileConfiguration = ServerConfiguration.default
     @Published var hostInput: String = "127.0.0.1"
     @Published var portInput: String = "11535"
     @Published var isModelAvailable: Bool = false
@@ -88,14 +89,53 @@ class ServerViewModel: ObservableObject {
     }
 
     let modelName = "apple-on-device"
+    
+    func readConfiguration() -> ServerConfiguration {
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let configDir = homeDir.appendingPathComponent(".config")
+        let configFile = homeDir.appendingPathComponent("apple-on-device.json")
+        
+        do {
+            let fileManager = FileManager.default
+            if !fileManager.fileExists(atPath: configDir.path) {
+                try fileManager.createDirectory(at: configDir, withIntermediateDirectories: true)
+            }
+            if !fileManager.fileExists(atPath: configFile.path) {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted]  // make JSON readable
+                let data = try encoder.encode(ServerConfiguration.default)
+                try data.write(to: configFile)
+                print("Created config file with defaults at \(configFile.path)")
+            }
+            
+            print("Reading config at \(configFile.path)")
+            let data = try Data(contentsOf: configFile)
+            let config = try JSONDecoder().decode(ServerConfiguration.self, from: data)
+            return config
+            
+        } catch {
+            let config = ServerConfiguration.default
+            print("Error handling config: \(error)")
+            return config
+        }
+
+        return ServerConfiguration.default
+    }
 
     init() {
+        fileConfiguration = readConfiguration()
         refreshAddresses()                              // populate the picker
-        selectedAddress = configuration.host
+        selectedAddress = fileConfiguration.host
+        
+        configuration.host = fileConfiguration.host
+        configuration.port = fileConfiguration.port
 
         // Initialize with current configuration values
         self.hostInput = configuration.host
         self.portInput = String(configuration.port)
+        print("Host: \(configuration.host)")
+        print("Port: \(configuration.port)")
+
 
         // Check model availability on startup
         Task {
